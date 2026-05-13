@@ -28,6 +28,8 @@ async function getReservation(id: string): Promise<Reservation | null> {
       description: reservation.product.description,
       price: reservation.product.price,
       imageUrl: reservation.product.imageUrl,
+      createdAt: reservation.product.createdAt.toISOString(),
+      updatedAt: reservation.product.updatedAt.toISOString(),
     },
     warehouse: {
       id: reservation.warehouse.id,
