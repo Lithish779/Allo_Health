@@ -1,19 +1,43 @@
 // src/app/page.tsx
 
+import { prisma } from '@/lib/prisma';
+import { releaseExpiredReservations } from '@/lib/expiry';
 import { ProductGrid } from '@/components/ProductGrid';
 import type { ProductWithStock } from '@/types';
 
 async function getProducts(): Promise<ProductWithStock[]> {
-  const baseUrl =
-    process.env.NEXT_PUBLIC_BASE_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+  // Lazy expiry cleanup
+  await releaseExpiredReservations().catch((err) =>
+    console.error('[HomePage] expiry cleanup failed:', err)
+  );
 
-  const res = await fetch(`${baseUrl}/api/products`, {
-    cache: 'no-store',
+  const products = await prisma.product.findMany({
+    orderBy: { name: 'asc' },
+    include: {
+      stock: {
+        include: { warehouse: true },
+        orderBy: { warehouse: { name: 'asc' } },
+      },
+    },
   });
 
-  if (!res.ok) throw new Error('Failed to fetch products');
-  return res.json();
+  return products.map((p) => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    imageUrl: p.imageUrl,
+    price: p.price,
+    createdAt: p.createdAt.toISOString(),
+    updatedAt: p.updatedAt.toISOString(),
+    stock: p.stock.map((s) => ({
+      warehouseId: s.warehouseId,
+      warehouseName: s.warehouse.name,
+      warehouseLocation: s.warehouse.location,
+      totalUnits: s.totalUnits,
+      reservedUnits: s.reservedUnits,
+      availableUnits: Math.max(0, s.totalUnits - s.reservedUnits),
+    })),
+  }));
 }
 
 export default async function HomePage() {

@@ -1,21 +1,40 @@
 // src/app/checkout/[id]/page.tsx
 
+import { prisma } from '@/lib/prisma';
 import { notFound } from 'next/navigation';
 import { CheckoutClient } from '@/components/CheckoutClient';
 import type { Reservation } from '@/types';
 
 async function getReservation(id: string): Promise<Reservation | null> {
-  const baseUrl =
-    process.env.NEXT_PUBLIC_BASE_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
-
-  const res = await fetch(`${baseUrl}/api/reservations/${id}`, {
-    cache: 'no-store',
+  const reservation = await prisma.reservation.findUnique({
+    where: { id },
+    include: { product: true, warehouse: true },
   });
 
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error('Failed to fetch reservation');
-  return res.json();
+  if (!reservation) return null;
+
+  return {
+    id: reservation.id,
+    productId: reservation.productId,
+    warehouseId: reservation.warehouseId,
+    quantity: reservation.quantity,
+    status: reservation.status,
+    expiresAt: reservation.expiresAt.toISOString(),
+    createdAt: reservation.createdAt.toISOString(),
+    updatedAt: reservation.updatedAt.toISOString(),
+    product: {
+      id: reservation.product.id,
+      name: reservation.product.name,
+      description: reservation.product.description,
+      price: reservation.product.price,
+      imageUrl: reservation.product.imageUrl,
+    },
+    warehouse: {
+      id: reservation.warehouse.id,
+      name: reservation.warehouse.name,
+      location: reservation.warehouse.location,
+    },
+  };
 }
 
 export default async function CheckoutPage({ params }: { params: { id: string } }) {
