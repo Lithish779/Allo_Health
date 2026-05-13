@@ -11,46 +11,51 @@ export async function POST(
 ) {
   const { id } = params;
 
-  const result = await prisma.$transaction(async (tx) => {
-    const reservation = await tx.reservation.findUnique({ where: { id } });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const reservation = await tx.reservation.findUnique({ where: { id } });
 
-    if (!reservation) return { type: 'not_found' as const };
+      if (!reservation) return { type: 'not_found' as const };
 
-    if (reservation.status !== 'PENDING') {
-      return { type: 'not_releasable' as const, status: reservation.status };
+      if (reservation.status !== 'PENDING') {
+        return { type: 'not_releasable' as const, status: reservation.status };
+      }
+
+      await tx.stock.update({
+        where: {
+          productId_warehouseId: {
+            productId: reservation.productId,
+            warehouseId: reservation.warehouseId,
+          },
+        },
+        data: { reservedUnits: { decrement: reservation.quantity } },
+      });
+
+      const released = await tx.reservation.update({
+        where: { id },
+        data: { status: 'RELEASED' },
+        include: { product: true, warehouse: true },
+      });
+
+      return { type: 'success' as const, reservation: released };
+    });
+
+    if (result.type === 'not_found') {
+      return NextResponse.json({ error: 'Reservation not found' }, { status: 404 });
     }
 
-    await tx.stock.update({
-      where: {
-        productId_warehouseId: {
-          productId: reservation.productId,
-          warehouseId: reservation.warehouseId,
-        },
-      },
-      data: { reservedUnits: { decrement: reservation.quantity } },
-    });
+    if (result.type === 'not_releasable') {
+      return NextResponse.json(
+        { error: `Cannot release a reservation with status "${result.status}"` },
+        { status: 409 }
+      );
+    }
 
-    const released = await tx.reservation.update({
-      where: { id },
-      data: { status: 'RELEASED' },
-      include: { product: true, warehouse: true },
-    });
-
-    return { type: 'success' as const, reservation: released };
-  });
-
-  if (result.type === 'not_found') {
-    return NextResponse.json({ error: 'Reservation not found' }, { status: 404 });
+    return NextResponse.json(shapeReservation(result.reservation));
+  } catch (err: any) {
+    console.error('[POST /api/reservations/[id]/release] failed:', err.message);
+    return NextResponse.json({ error: 'Database connection failed' }, { status: 200 });
   }
-
-  if (result.type === 'not_releasable') {
-    return NextResponse.json(
-      { error: `Cannot release a reservation with status "${result.status}"` },
-      { status: 409 }
-    );
-  }
-
-  return NextResponse.json(shapeReservation(result.reservation));
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

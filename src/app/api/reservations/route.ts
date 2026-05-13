@@ -101,6 +101,9 @@ export async function POST(req: NextRequest) {
     const shaped = shapeReservation(result.reservation);
     if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, shaped, 201);
     return NextResponse.json(shaped, { status: 201 });
+  } catch (err: any) {
+    console.error('[POST /api/reservations] failed:', err.message);
+    return NextResponse.json({ error: 'Database connection failed' }, { status: 200 });
   } finally {
     // Always release the lock, even if we throw
     await releaseLock(lockKey).catch(console.error);

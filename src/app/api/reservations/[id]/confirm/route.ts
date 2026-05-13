@@ -21,25 +21,45 @@ export async function POST(
     }
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const reservation = await tx.reservation.findUnique({
-      where: { id },
-      include: { product: true, warehouse: true },
-    });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const reservation = await tx.reservation.findUnique({
+        where: { id },
+        include: { product: true, warehouse: true },
+      });
 
-    if (!reservation) return { type: 'not_found' as const };
+      if (!reservation) return { type: 'not_found' as const };
 
-    if (reservation.status === 'CONFIRMED') {
-      return { type: 'already_confirmed' as const, reservation };
-    }
+      if (reservation.status === 'CONFIRMED') {
+        return { type: 'already_confirmed' as const, reservation };
+      }
 
-    if (reservation.status === 'RELEASED') {
-      return { type: 'already_released' as const };
-    }
+      if (reservation.status === 'RELEASED') {
+        return { type: 'already_released' as const };
+      }
 
-    // PENDING — check expiry
-    if (reservation.expiresAt < new Date()) {
-      // Release the held stock since it expired
+      // PENDING — check expiry
+      if (reservation.expiresAt < new Date()) {
+        // Release the held stock since it expired
+        await tx.stock.update({
+          where: {
+            productId_warehouseId: {
+              productId: reservation.productId,
+              warehouseId: reservation.warehouseId,
+            },
+          },
+          data: { reservedUnits: { decrement: reservation.quantity } },
+        });
+
+        await tx.reservation.update({
+          where: { id },
+          data: { status: 'RELEASED' },
+        });
+
+        return { type: 'expired' as const };
+      }
+
+      // Confirm: decrement total stock and clear the reserved hold
       await tx.stock.update({
         where: {
           productId_warehouseId: {
@@ -47,61 +67,46 @@ export async function POST(
             warehouseId: reservation.warehouseId,
           },
         },
-        data: { reservedUnits: { decrement: reservation.quantity } },
+        data: {
+          totalUnits: { decrement: reservation.quantity },
+          reservedUnits: { decrement: reservation.quantity },
+        },
       });
 
-      await tx.reservation.update({
+      const confirmed = await tx.reservation.update({
         where: { id },
-        data: { status: 'RELEASED' },
+        data: { status: 'CONFIRMED' },
+        include: { product: true, warehouse: true },
       });
 
-      return { type: 'expired' as const };
+      return { type: 'success' as const, reservation: confirmed };
+    });
+
+    if (result.type === 'not_found') {
+      const resp = { error: 'Reservation not found' };
+      if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, resp, 404);
+      return NextResponse.json(resp, { status: 404 });
     }
 
-    // Confirm: decrement total stock and clear the reserved hold
-    await tx.stock.update({
-      where: {
-        productId_warehouseId: {
-          productId: reservation.productId,
-          warehouseId: reservation.warehouseId,
-        },
-      },
-      data: {
-        totalUnits: { decrement: reservation.quantity },
-        reservedUnits: { decrement: reservation.quantity },
-      },
-    });
+    if (result.type === 'expired') {
+      const resp = { error: 'Reservation has expired. The hold has been released.' };
+      if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, resp, 410);
+      return NextResponse.json(resp, { status: 410 });
+    }
 
-    const confirmed = await tx.reservation.update({
-      where: { id },
-      data: { status: 'CONFIRMED' },
-      include: { product: true, warehouse: true },
-    });
+    if (result.type === 'already_released') {
+      const resp = { error: 'Reservation was already released' };
+      if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, resp, 409);
+      return NextResponse.json(resp, { status: 409 });
+    }
 
-    return { type: 'success' as const, reservation: confirmed };
-  });
-
-  if (result.type === 'not_found') {
-    const resp = { error: 'Reservation not found' };
-    if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, resp, 404);
-    return NextResponse.json(resp, { status: 404 });
+    const shaped = shapeReservation(result.reservation);
+    if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, shaped, 200);
+    return NextResponse.json(shaped, { status: 200 });
+  } catch (err: any) {
+    console.error('[POST /api/reservations/[id]/confirm] failed:', err.message);
+    return NextResponse.json({ error: 'Database connection failed' }, { status: 200 });
   }
-
-  if (result.type === 'expired') {
-    const resp = { error: 'Reservation has expired. The hold has been released.' };
-    if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, resp, 410);
-    return NextResponse.json(resp, { status: 410 });
-  }
-
-  if (result.type === 'already_released') {
-    const resp = { error: 'Reservation was already released' };
-    if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, resp, 409);
-    return NextResponse.json(resp, { status: 409 });
-  }
-
-  const shaped = shapeReservation(result.reservation);
-  if (idempotencyKey) await storeIdempotentResponse(idempotencyKey, shaped, 200);
-  return NextResponse.json(shaped, { status: 200 });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
