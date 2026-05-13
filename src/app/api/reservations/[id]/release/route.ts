@@ -7,9 +7,9 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = params;
+  const { id } = await params;
 
   try {
     const result = await prisma.$transaction(async (tx) => {
