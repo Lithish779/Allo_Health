@@ -15,6 +15,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const released = await releaseExpiredReservations();
-  return NextResponse.json({ ok: true, released, timestamp: new Date().toISOString() });
+  try {
+    const released = await releaseExpiredReservations();
+    return NextResponse.json({ ok: true, released, timestamp: new Date().toISOString() });
+  } catch (err: any) {
+    console.error('[CRON] failed:', err.message);
+    return NextResponse.json({ error: 'Failed to expire reservations', details: err.message }, { status: 500 });
+  }
 }
